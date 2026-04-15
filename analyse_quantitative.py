@@ -140,7 +140,22 @@ def analyse_quantitative(df, var_quanti, var_cible, var_mois=None,
         "mediane_non_defaut": grp0.median(),
         "mediane_defaut": grp1.median(),
     }
-
+    # --- Boxplot par classe de défaut ---
+    fig, ax = plt.subplots(figsize=figsize_base)
+    data_box = [grp0, grp1]
+    bp = ax.boxplot(data_box, labels=["Non défaut (0)", "Défaut (1)"],
+                    patch_artist=True, widths=0.4,
+                    medianprops=dict(color="white", linewidth=2),
+                    flierprops=dict(marker="o", markersize=3, alpha=0.3))
+    bp["boxes"][0].set_facecolor("#2E4057")
+    bp["boxes"][1].set_facecolor("#E07A5F")
+    ax.set_title(f"{var_quanti} — Boxplot par classe {var_cible}",
+                 fontsize=14, fontweight="bold", pad=15)
+    ax.set_ylabel(var_quanti)
+    ax.spines[["top", "right"]].set_visible(False)
+    plt.tight_layout()
+    #plt.savefig(f"boxplot_{var_quanti}.png", dpi=150, bbox_inches="tight")
+    plt.show()
     # --- Discrétisation ---
     if seuils is not None:
         # Seuils manuels
