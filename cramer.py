@@ -132,3 +132,50 @@ def build_bin_description(thresholds):
         bin_desc[f] = intervals
     
     return bin_desc
+
+
+import polars as pl
+
+def impute_missing_values(
+    lazyframe: pl.LazyFrame, 
+    columns: list[str], 
+    fill_value: any
+) -> pl.LazyFrame:
+    """
+    Impute les valeurs manquantes d'une liste de colonnes par une valeur précise.
+    
+    Parameters
+    ----------
+    lazyframe : pl.LazyFrame
+        Le LazyFrame Polars contenant les données
+    columns : list[str]
+        Liste des noms de colonnes à imputer
+    fill_value : any
+        Valeur à utiliser pour remplacer les valeurs manquantes (None/null)
+    
+    Returns
+    -------
+    pl.LazyFrame
+        Un nouveau LazyFrame avec les valeurs manquantes imputées
+    """
+    return lazyframe.with_columns(
+        [
+            pl.col(col).fill_null(fill_value).alias(col) 
+            for col in columns
+        ]
+    )
+
+# Exemple d'utilisation
+df = pl.LazyFrame({
+    'a': [1, None, 3, 4],
+    'b': [None, 2, None, 5],
+    'c': ['x', 'y', None, 'z'],
+    'd': [10, 20, 30, 40]
+})
+
+# Imputer les colonnes 'a' et 'b' avec 0, et 'c' avec 'inconnu'
+result = (impute_missing_values(df, ['a', 'b'], 0)
+          .pipe(impute_missing_values, ['c'], 'inconnu'))
+
+# Exécuter et afficher le résultat
+print(result.collect())
