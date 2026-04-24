@@ -1,3 +1,64 @@
+import optuna
+import xgboost as xgb
+from sklearn.model_selection import StratifiedKFold
+import numpy as np
+
+optuna.logging.set_verbosity(optuna.logging.WARNING)
+
+# Création des DMatrix une seule fois (plus efficace)
+dtrain = xgb.DMatrix(X_train_enc, label=y_train)
+dtest  = xgb.DMatrix(X_test_enc,  label=y_test)
+
+cv = StratifiedKFold(n_splits=3, shuffle=True, random_state=42)
+
+def objective(trial):
+    params = {
+        "objective":        "binary:logistic",
+        "eval_metric":      "auc",
+        "tree_method":      "hist",
+        "seed":             42,
+        "max_depth":        trial.suggest_int("max_depth", 3, 8),
+        "learning_rate":    trial.suggest_float("learning_rate", 0.01, 0.2, log=True),
+        "subsample":        trial.suggest_float("subsample", 0.5, 1.0),
+        "colsample_bytree": trial.suggest_float("colsample_bytree", 0.5, 1.0),
+        "gamma":            trial.suggest_float("gamma", 0, 15),
+        "min_child_weight": trial.suggest_int("min_child_weight", 1, 20),
+        "alpha":            trial.suggest_float("alpha", 1e-3, 10, log=True),
+        "lambda":           trial.suggest_float("lambda", 1e-3, 10, log=True),
+    }
+    num_boost_round = trial.suggest_int("num_boost_round", 100, 800)
+
+    # Cross-validation manuelle avec DMatrix
+    aucs = []
+    for train_idx, val_idx in cv.split(X_train_enc, y_train):
+
+        X_tr, X_val = X_train_enc[train_idx], X_train_enc[val_idx]
+        y_tr, y_val = y_train[train_idx],     y_train[val_idx]
+
+        d_tr  = xgb.DMatrix(X_tr,  label=y_tr)
+        d_val = xgb.DMatrix(X_val, label=y_val)
+
+        model = xgb.train(
+            params,
+            d_tr,
+            num_boost_round=num_boost_round,
+            evals=[(d_val, "val")],
+            verbose_eval=False,
+        )
+
+        preds = model.predict(d_val)
+        auc = roc_auc_score(y_val, preds)
+        aucs.append(auc)
+
+    return np.mean(aucs)
+
+study = optuna.create_study(direction="maximize")
+study.optimize(objective, n_trials=30, show_progress_bar=True)
+
+print(f"Meilleur AUC CV : {study.best_value:.4f}")
+print("Meilleurs paramètres :")
+study.best_params
+
 def summarize_model(self,logit_model): 
         params = logit_model.params
         var_set = { col.split('&')[0] for col in params.index if col!='const'}
