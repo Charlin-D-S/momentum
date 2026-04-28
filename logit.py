@@ -1,3 +1,105 @@
+import networkx as nx
+import matplotlib.pyplot as plt
+
+
+def visualiser_correlations(
+    correlations: dict[str, list[str] | set[str]],
+    titre: str = "Clusters de variables corrélées",
+    figsize: tuple[int, int] = (14, 10),
+    seed: int = 42,
+):
+    """
+    Visualise un dictionnaire {variable_representante: [variables_correlees_ordonnees]}
+    sous forme de graphe.
+    
+    - Les variables représentantes (clés) sont mises en avant (taille, couleur).
+    - Les variables corrélées sont reliées à leur représentante.
+    - L'épaisseur de l'arête reflète le rang d'importance (rang 1 = plus épais).
+    """
+    G = nx.Graph()
+    
+    representants = list(correlations.keys())
+    
+    # Ajout des nœuds avec un attribut "type"
+    for rep in representants:
+        G.add_node(rep, type="representant")
+        correlees = list(correlations[rep])  # convertit set/list en liste
+        for rang, var in enumerate(correlees, start=1):
+            if var not in G:
+                G.add_node(var, type="correlee")
+            # Poids inversement proportionnel au rang : rang 1 → poids fort
+            G.add_edge(rep, var, rang=rang, poids=1.0 / rang)
+    
+    # Layout : spring layout, avec les représentants comme ancres
+    pos = nx.spring_layout(
+        G,
+        seed=seed,
+        k=1.5,           # plus k est grand, plus les nœuds s'éloignent
+        iterations=100,
+        weight="poids",  # arêtes "lourdes" rapprochent les nœuds
+    )
+    
+    fig, ax = plt.subplots(figsize=figsize)
+    
+    # Séparation des nœuds par type
+    nodes_rep = [n for n, d in G.nodes(data=True) if d["type"] == "representant"]
+    nodes_cor = [n for n, d in G.nodes(data=True) if d["type"] == "correlee"]
+    
+    # Arêtes : épaisseur proportionnelle à l'importance (rang 1 = plus épais)
+    edges = G.edges(data=True)
+    largeurs = [3.0 / d["rang"] for _, _, d in edges]
+    
+    nx.draw_networkx_edges(
+        G, pos, width=largeurs, edge_color="#999999", alpha=0.6, ax=ax,
+    )
+    nx.draw_networkx_nodes(
+        G, pos, nodelist=nodes_rep,
+        node_color="#1f77b4", node_size=1400, edgecolors="white", linewidths=2, ax=ax,
+    )
+    nx.draw_networkx_nodes(
+        G, pos, nodelist=nodes_cor,
+        node_color="#ff7f0e", node_size=600, edgecolors="white", linewidths=1.5, alpha=0.85, ax=ax,
+    )
+    nx.draw_networkx_labels(
+        G, pos,
+        labels={n: n for n in nodes_rep},
+        font_size=11, font_weight="bold", ax=ax,
+    )
+    nx.draw_networkx_labels(
+        G, pos,
+        labels={n: n for n in nodes_cor},
+        font_size=8, ax=ax,
+    )
+    
+    # Légende manuelle
+    from matplotlib.lines import Line2D
+    legende = [
+        Line2D([0], [0], marker="o", color="w", label="Variable représentante",
+               markerfacecolor="#1f77b4", markersize=14),
+        Line2D([0], [0], marker="o", color="w", label="Variable corrélée",
+               markerfacecolor="#ff7f0e", markersize=10),
+        Line2D([0], [0], color="#999999", lw=3, label="Forte importance (rang 1)"),
+        Line2D([0], [0], color="#999999", lw=1, label="Plus faible importance"),
+    ]
+    ax.legend(handles=legende, loc="upper left", frameon=True, fontsize=9)
+    
+    ax.set_title(titre, fontsize=14, fontweight="bold")
+    ax.axis("off")
+    plt.tight_layout()
+    plt.show()
+    
+    return G
+
+correlations = {
+    "revenu":    ["salaire", "patrimoine", "bonus"],
+    "age":       ["anciennete_emploi", "anciennete_client"],
+    "encours":   ["plafond", "utilisation", "nb_credits", "encours_moyen"],
+    "score_ext": ["score_bureau", "historique_paiement"],
+}
+
+G = visualiser_correlations(correlations, titre="Clusters de variables corrélées — score crédit")
+
+
 def expr_ordre_modalites(
     lf: pl.LazyFrame,
     var: str,
