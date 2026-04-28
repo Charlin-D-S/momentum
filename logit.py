@@ -1,4 +1,26 @@
-import optuna
+def expr_ordre_modalites(
+    lf: pl.LazyFrame,
+    var: str,
+    target: str,
+    sens: str = "croissant",
+) -> pl.LazyFrame:
+    descending = sens == "decroissant"
+    return (
+        lf
+        .filter(pl.col(var).is_not_null())
+        .group_by(pl.col(var).cast(pl.Utf8).alias(var))
+        .agg(pl.col(target).sum().alias("nb_defauts"))
+        .sort("nb_defauts", descending=descending)
+        .select(pl.col(var).implode().alias(var))
+    )
+variables = ["secteur", "region", "type_client"]
+
+ordres = pl.concat(
+    [expr_ordre_modalites(lf, v, "defaut") for v in variables],
+    how="horizontal",
+)
+# ordres.collect() → 1 ligne, 3 colonnes, chacune contenant une liste
+    import optuna
 import xgboost as xgb
 from sklearn.model_selection import StratifiedKFold
 import numpy as np
