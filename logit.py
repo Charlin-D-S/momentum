@@ -1,7 +1,17 @@
 import networkx as nx
 import matplotlib.pyplot as plt
 
+        # ---- 3) Contribution score ----
+        moy_pts = df.groupby('variable')['points/1000'].mean()
 
+        df['var'] = df.apply(lambda r: (r['taux_pop (%)']/100) * (moy_pts[r["variable"]] - r["points/1000"])**2,
+                                                axis=1)
+        ecart_type = np.sqrt(df.groupby('variable')['var'].sum())
+        ecart_type_sum = np.sum(ecart_type)
+        df['contrib_score (%)'] = df.apply(lambda r: 100 *ecart_type[r["variable"]]/ ecart_type_sum,
+                                        axis=1)
+
+        df.drop('var',axis=1,inplace=True)
 def visualiser_correlations(
     correlations: dict[str, list[str] | set[str]],
     titre: str = "Clusters de variables corrélées",
