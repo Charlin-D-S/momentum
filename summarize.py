@@ -1,3 +1,149 @@
+    import numpy as np
+import pandas as pd
+
+def construire_woe_df(
+    df: pd.DataFrame,
+    y: pd.Series,
+    variables: list[str],
+) -> pd.DataFrame:
+    """
+    Construit un DataFrame de WoE à partir d'un DataFrame de variables catégorielles.
+    Pour chaque variable, calcule le WoE de chaque modalité puis mappe sur les individus.
+
+    Paramètres
+    ----------
+    df        : DataFrame contenant les variables catégorielles (modalités = tranches).
+    y         : Série binaire (0/1) — cible défaut.
+    variables : Liste des variables à traiter.
+
+    Retourne
+    --------
+    DataFrame (n_individus × n_variables) contenant les WoE.
+    """
+    n_def   = y.sum()
+    n_sain  = len(y) - n_def
+    eps     = 1e-10
+    woe_df  = pd.DataFrame(index=df.index)
+
+    for var in variables:
+        stats = (
+            pd.DataFrame({"modalite": df[var], "y": y})
+            .groupby("modalite")["y"]
+            .agg(n_def="sum", n_tot="count")
+        )
+        stats["n_sain"] = stats["n_tot"] - stats["n_def"]
+        stats["p1"]     = (stats["n_def"]  / n_def ).clip(lower=eps)
+        stats["p0"]     = (stats["n_sain"] / n_sain).clip(lower=eps)
+        stats["woe"]    = np.log(stats["p1"] / stats["p0"])
+
+        # Mapping modalité → WoE sur chaque individu
+        woe_df[var] = df[var].map(stats["woe"])
+
+    return woe_df
+def iv_sur_deciles(scores: np.ndarray, y: np.ndarray, n_deciles: int = 10) -> float:
+    """
+    Calcule l'IV d'un vecteur de scores continus en le découpant en déciles.
+    Gère les cas dégénérés (division par zéro, deciles vides).
+    """
+    n_def = y.sum()
+    n_sain = len(y) - n_def
+
+    if n_def == 0 or n_sain == 0:
+        return 0.0
+
+    # Découpage en déciles (quantiles) — duplicates="drop" évite les erreurs
+    # si le score est peu dispersé
+    deciles = pd.qcut(scores, q=n_deciles, duplicates="drop")
+
+    df = pd.DataFrame({"decile": deciles, "y": y})
+    stats = df.groupby("decile", observed=True)["y"].agg(
+        n_def="sum",
+        n_tot="count",
+    )
+    stats["n_sain"] = stats["n_tot"] - stats["n_def"]
+
+    # Proportions — on clip pour éviter log(0)
+    eps = 1e-10
+    p1 = (stats["n_def"] / n_def).clip(lower=eps)
+    p0 = (stats["n_sain"] / n_sain).clip(lower=eps)
+
+    iv = ((p1 - p0) * np.log(p1 / p0)).sum()
+    return float(iv)
+
+
+def forward_miv(
+    woe_df: pd.DataFrame,
+    y: pd.Series,
+    seuil_miv: float = 0.01,
+    n_max: int = 20,
+    n_deciles: int = 10,
+) -> pd.DataFrame:
+    """
+    Sélection forward de variables par Marginal Information Value.
+
+    Paramètres
+    ----------
+    woe_df   : DataFrame (n_individus × n_variables) contenant les WoE
+               de chaque individu pour chaque variable candidate.
+               Les colonnes sont les noms des variables.
+    y        : Série binaire (0/1) — cible défaut.
+    seuil_miv: MIV minimale pour qu'une variable soit ajoutée.
+    n_max    : Nombre maximum de variables à sélectionner.
+    n_deciles: Nombre de déciles pour le calcul de l'IV du score.
+
+    Retourne
+    --------
+    DataFrame avec colonnes :
+        etape, variable, iv_cumule, miv, variables_modele
+    """
+    y_arr = np.asarray(y)
+    candidats = list(woe_df.columns)
+    score_courant = np.zeros(len(y_arr))
+    iv_courant = 0.0
+    modele = []
+    historique = []
+
+    for etape in range(1, n_max + 1):
+        meilleure_var = None
+        meilleure_miv = -np.inf
+        meilleur_iv = None
+
+        for var in candidats:
+            score_test = score_courant + woe_df[var].values
+            iv_test = iv_sur_deciles(score_test, y_arr, n_deciles)
+            miv = iv_test - iv_courant
+
+            if miv > meilleure_miv:
+                meilleure_miv = miv
+                meilleure_var = var
+                meilleur_iv = iv_test
+
+        # Critère d'arrêt
+        if meilleure_miv < seuil_miv:
+            print(f"Arrêt étape {etape} — MIV maximale ({meilleure_miv:.4f}) < seuil ({seuil_miv})")
+            break
+
+        # Mise à jour
+        modele.append(meilleure_var)
+        candidats.remove(meilleure_var)
+        score_courant = score_courant + woe_df[meilleure_var].values
+        iv_courant = meilleur_iv
+
+        historique.append({
+            "etape": etape,
+            "variable": meilleure_var,
+            "iv_cumule": round(meilleur_iv, 4),
+            "miv": round(meilleure_miv, 4),
+            "variables_modele": modele.copy(),
+        })
+
+        print(f"Étape {etape:2d} | +{meilleure_var:<30s} | IV cumulé = {meilleur_iv:.4f} | MIV = {meilleure_miv:.4f}")
+
+    return pd.DataFrame(historique)
+    
+    
+    
+    
     def summarize_model(self,logit_model): 
         params = logit_model.params
         var_set = { col.split('&')[0] for col in params.index if col!='const'}
