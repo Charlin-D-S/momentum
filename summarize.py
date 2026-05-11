@@ -1,5 +1,45 @@
     import numpy as np
 import pandas as pd
+from sklearn.model_selection import StratifiedKFold
+import pandas as pd
+import numpy as np
+
+
+def split_stratifie(
+    df: pd.DataFrame,
+    col_defaut: str,
+    col_date: str,
+    n_splits: int = 4,
+    seed: int = 42,
+) -> list[pd.DataFrame]:
+    """
+    Divise df en n_splits parties stratifiées sur col_defaut et col_date.
+
+    La stratification combinée garantit que chaque partie contient
+    des proportions similaires de défauts ET de périodes.
+
+    Retourne une liste de n_splits DataFrames.
+    """
+    # Discrétiser la date en quartiles si elle est continue
+    # (StratifiedKFold a besoin de catégories, pas de dates brutes)
+    date_cat = pd.qcut(
+        df[col_date].rank(method="first"),  # rank évite les problèmes de doublons
+        q=4,
+        labels=["Q1", "Q2", "Q3", "Q4"],
+    ).astype(str)
+
+    # Variable de strate combinée : défaut × période
+    strate = df[col_defaut].astype(str) + "_" + date_cat
+
+    # Split stratifié
+    skf = StratifiedKFold(n_splits=n_splits, shuffle=True, random_state=seed)
+
+    splits = []
+    for _, idx in skf.split(df, strate):
+        splits.append(df.iloc[idx].reset_index(drop=True))
+
+    return splits
+
 
 def construire_woe_df(
     df: pd.DataFrame,
