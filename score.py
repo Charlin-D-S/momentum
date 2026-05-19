@@ -1,4 +1,86 @@
+from sklearn.metrics import roc_auc_score, roc_curve
 import polars as pl
+import pandas as pd
+import numpy as np
+
+
+def evaluer_segment(
+    lf: pl.LazyFrame,
+    col_cible: str,
+    col_proba: str,
+    filtre: pl.Expr | None = None,
+) -> pd.DataFrame:
+    """
+    Filtre un LazyFrame, collecte les données nécessaires et retourne
+    un DataFrame de métriques de performance.
+
+    Paramètres
+    ----------
+    lf        : LazyFrame scoré (contient col_cible et col_proba).
+    col_cible : Nom de la colonne cible binaire (0/1).
+    col_proba : Nom de la colonne de probabilité de défaut (score_proba).
+    filtre    : Expression Polars de filtrage (None = pas de filtre).
+
+    Retourne
+    --------
+    DataFrame pandas avec une ligne et les colonnes :
+        effectif, nb_defauts, taux_defaut, pd_moyenne,
+        auc, gini, ks_stat
+    """
+    # Application du filtre
+    lf_filtre = lf.filter(filtre) if filtre is not None else lf
+
+    # Collecte minimale — uniquement les colonnes nécessaires
+    df = (
+        lf_filtre
+        .select([col_cible, col_proba])
+        .collect()
+    )
+
+    y    = df[col_cible].to_numpy()
+    prob = df[col_proba].to_numpy()
+
+    effectif   = len(y)
+    nb_defauts = int(y.sum())
+    taux_defaut = nb_defauts / effectif
+    pd_moyenne  = prob.mean()
+
+    # AUC & Gini
+    auc  = roc_auc_score(y, prob)
+    gini = 2 * auc - 1
+
+    # KS stat
+    fpr, tpr, _ = roc_curve(y, prob)
+    ks_stat = float(np.max(tpr - fpr))
+
+    return pd.DataFrame([{
+        "effectif":    effectif,
+        "nb_defauts":  nb_defauts,
+        "taux_defaut": round(taux_defaut, 4),
+        "pd_moyenne":  round(pd_moyenne,  4),
+        "auc":         round(auc,         4),
+        "gini":        round(gini,        4),
+        "ks_stat":     round(ks_stat,     4),
+    }])
+    
+    segments = {
+    "total":       None,
+    "secteur_AB":  pl.col("secteur").is_in(["A", "B"]),
+    "anciens":     pl.col("anciennete") > 24,
+    "nouveaux":    pl.col("anciennete") <= 24,
+}
+
+résumé = pd.concat(
+    [evaluer_segment(lf_scoré, "defaut", "score_proba", f).assign(segment=nom)
+     for nom, f in segments.items()],
+    ignore_index=True,
+).set_index("segment")
+
+print(résumé)
+    
+    
+    
+    import polars as pl
 import numpy as np
 import ast
 import re
