@@ -1,4 +1,78 @@
-import pandas as pd
+def extraire_règles_feuilles(model: lgb.Booster, df_lgb: pd.DataFrame) -> dict[int, str]:
+    """
+    Extrait les règles de segmentation en langage naturel pour chaque feuille.
+    Gère correctement les splits numériques ET catégoriels.
+    """
+    tree_df = model.trees_to_dataframe()
+    tree_df = tree_df[tree_df["tree_index"] == 0].copy()
+
+    # Mapping feature → catégories (pour reconstruire les labels depuis les indices)
+    # LightGBM encode les catégories en entiers — on récupère le mapping depuis le df original
+    cat_mappings = {}
+    for col in df_lgb.select_dtypes(include="category").columns:
+        cat_mappings[col] = dict(enumerate(df_lgb[col].cat.categories))
+
+    def est_numérique(seuil) -> bool:
+        try:
+            float(seuil)
+            return True
+        except (ValueError, TypeError):
+            return False
+
+    def décoder_cats(feature: str, seuil_str: str, est_gauche: bool) -> str:
+        """Décode les indices catégoriels LightGBM en labels lisibles."""
+        indices_gauche = [int(i) for i in str(seuil_str).split("||")]
+        mapping = cat_mappings.get(feature, {})
+        labels_gauche = [str(mapping.get(i, i)) for i in indices_gauche]
+        if est_gauche:
+            return f"{feature} ∈ {{{', '.join(labels_gauche)}}}"
+        else:
+            return f"{feature} ∉ {{{', '.join(labels_gauche)}}}"
+
+    def chemin_vers_feuille(leaf_id: str) -> list[str]:
+        conditions = []
+        nœud_courant = leaf_id
+
+        while True:
+            parent = tree_df[
+                (tree_df["left_child"] == nœud_courant) |
+                (tree_df["right_child"] == nœud_courant)
+            ]
+            if parent.empty:
+                break
+
+            parent     = parent.iloc[0]
+            feature    = parent["split_feature"]
+            seuil      = parent["threshold"]
+            est_gauche = parent["left_child"] == nœud_courant
+
+            if est_numérique(seuil):
+                # Split numérique
+                seuil_f = float(seuil)
+                if est_gauche:
+                    conditions.append(f"{feature} <= {seuil_f:.4g}")
+                else:
+                    conditions.append(f"{feature} > {seuil_f:.4g}")
+            else:
+                # Split catégoriel
+                conditions.append(décoder_cats(feature, seuil, est_gauche))
+
+            nœud_courant = parent["node_index"]
+
+        conditions.reverse()
+        return conditions
+
+    feuilles = tree_df[tree_df["node_index"].str.startswith("0-L")]
+    règles   = {}
+    for _, feuille in feuilles.iterrows():
+        leaf_id = feuille["node_index"]
+        chemin  = chemin_vers_feuille(leaf_id)
+        règles[leaf_id] = " ET ".join(chemin) if chemin else "Population totale"
+
+    return règles
+    
+    
+    import pandas as pd
 import numpy as np
 import lightgbm as lgb
 from scipy import stats
