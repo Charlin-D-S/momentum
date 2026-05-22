@@ -1,4 +1,110 @@
-def extraire_règles_feuilles(model: lgb.Booster, cat_mappings: dict) -> dict[int, str]:
+import shap
+import matplotlib.pyplot as plt
+
+
+def analyser_shap_calibration(
+    model: lgb.Booster,
+    df_lgb: pd.DataFrame,
+    cat_mappings: dict,
+    max_display: int = 15,
+) -> pd.DataFrame:
+    """
+    Calcule et visualise les valeurs SHAP du modèle LightGBM de diagnostic
+    de calibration.
+
+    Paramètres
+    ----------
+    model       : Modèle LightGBM entraîné sur les résidus.
+    df_lgb      : DataFrame utilisé pour l'entraînement (features uniquement).
+    cat_mappings: Mapping catégoriel {col: {index: label}}.
+    max_display : Nombre max de variables affichées sur les plots.
+
+    Retourne
+    --------
+    DataFrame d'importance SHAP trié par importance décroissante.
+    """
+    # Calcul des valeurs SHAP
+    explainer   = shap.TreeExplainer(model)
+    shap_values = explainer.shap_values(df_lgb)
+
+    # DataFrame d'importance : moyenne des |SHAP| par variable
+    importance_df = (
+        pd.DataFrame({
+            "variable":       df_lgb.columns.tolist(),
+            "importance_mean_abs": np.abs(shap_values).mean(axis=0),
+            "importance_std":      shap_values.std(axis=0),
+            "effet_moyen_signe":   shap_values.mean(axis=0),
+        })
+        .sort_values("importance_mean_abs", ascending=False)
+        .reset_index(drop=True)
+    )
+    importance_df["importance_pct"] = (
+        importance_df["importance_mean_abs"] /
+        importance_df["importance_mean_abs"].sum() * 100
+    ).round(1)
+
+    # ── Plot 1 : Bar plot importance moyenne ──────────────────────────────
+    fig, axes = plt.subplots(1, 2, figsize=(18, 6))
+
+    top_vars = importance_df.head(max_display)
+    axes[0].barh(
+        top_vars["variable"][::-1],
+        top_vars["importance_mean_abs"][::-1],
+        color="#1f77b4", edgecolor="white", linewidth=0.5,
+    )
+    axes[0].set_xlabel("Importance SHAP moyenne (|SHAP|)", fontsize=11)
+    axes[0].set_title("Importance des variables\n(contribution aux erreurs de calibration)",
+                      fontsize=12, fontweight="bold")
+    axes[0].axvline(0, color="black", linewidth=0.8)
+
+    # Annotations % sur les barres
+    for i, (_, row) in enumerate(top_vars[::-1].iterrows()):
+        axes[0].text(
+            row["importance_mean_abs"] * 1.01,
+            i,
+            f"{row['importance_pct']:.1f}%",
+            va="center", fontsize=8,
+        )
+
+    # ── Plot 2 : Effet moyen signé (sur/sous estimation par variable) ──────
+    couleurs = [
+        "#d62728" if v > 0 else "#2ca02c"
+        for v in top_vars["effet_moyen_signe"][::-1]
+    ]
+    axes[1].barh(
+        top_vars["variable"][::-1],
+        top_vars["effet_moyen_signe"][::-1],
+        color=couleurs, edgecolor="white", linewidth=0.5,
+    )
+    axes[1].set_xlabel("Effet SHAP moyen signé", fontsize=11)
+    axes[1].set_title("Direction de l'effet\n(rouge = pousse vers sur-estimation)",
+                      fontsize=12, fontweight="bold")
+    axes[1].axvline(0, color="black", linewidth=1.2)
+
+    plt.tight_layout()
+    plt.show()
+
+    # ── Plot 3 : Beeswarm SHAP summary ────────────────────────────────────
+    shap.summary_plot(
+        shap_values,
+        df_lgb,
+        max_display=max_display,
+        show=True,
+        plot_type="dot",
+    )
+
+    return importance_df
+    
+ def diagnostiquer_calibration(..., shap: bool = False):
+    ...
+    # À la fin, juste avant le return
+    if shap:
+        shap_df = analyser_shap_calibration(model, df_lgb, cat_mappings)
+        return pd.DataFrame(résultats).sort_values("statut").reset_index(drop=True), shap_df
+
+    return pd.DataFrame(résultats).sort_values("statut").reset_index(drop=True)   
+    
+    def extraire_règles_feuilles(model: lgb.Booster, cat_mappings: dict) -> dict[int, str]:
     tree_df = model.trees_to_dataframe()
     tree_df = tree_df[tree_df["tree_index"] == 0].copy()
 
