@@ -1,4 +1,25 @@
-import pandas as pd
+def appliquer_mapping(
+    lf: pl.LazyFrame,
+    mapping: dict[str, dict],
+) -> pl.LazyFrame:
+    """
+    Remplace les valeurs numériques d'un LazyFrame par leurs modalités
+    via un mapping {variable: {valeur: modalité}}.
+    """
+    exprs = [
+        pl.col(var)
+          .cast(pl.Utf8)  # cast pour éviter les problèmes de type
+          .replace(
+              {str(k): str(v) for k, v in modalités.items()}
+          )
+          .alias(var)
+        for var, modalités in mapping.items()
+        if var in lf.columns
+    ]
+    return lf.with_columns(exprs)
+    
+    
+    import pandas as pd
 import numpy as np
 import xgboost as xgb
 import shap
