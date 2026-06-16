@@ -6,11 +6,18 @@ def find_boundary_individuals(
     proba_max: float | None = None,
 ) -> pl.DataFrame:
     """
-    Retourne les n individus dont score_points est le plus proche du seuil,
-    filtrés sur la zone [proba_min, proba_max] (bornes optionnelles).
+    Retourne les n profils DISTINCTS (en termes de combinaison de bins)
+    dont le score est le plus proche du seuil.
+
+    La déduplication porte sur toutes les colonnes _bin_{var} présentes
+    dans le DataFrame. Pour chaque profil unique, on conserve le
+    représentant le plus proche du seuil.
+    Un champ _n_clients indique combien d'individus partagent ce profil.
     """
     if df.is_empty():
         return df
+
+    # Filtrage de zone
     sub = df
     if proba_min is not None:
         sub = sub.filter(pl.col("score_proba") > proba_min)
@@ -18,15 +25,34 @@ def find_boundary_individuals(
         sub = sub.filter(pl.col("score_proba") <= proba_max)
     if sub.is_empty():
         return sub
-    return (
+
+    # Colonnes de profil : toutes les _bin_{var} présentes
+    bin_cols = [c for c in sub.columns if c.startswith("_bin_")]
+
+    # Distance au seuil
+    sub = sub.with_columns(
+        (pl.col("score_points") - threshold_points).abs().alias("_dist_seuil")
+    )
+
+    # Compter combien d'individus partagent chaque profil
+    counts = (
         sub
-        .with_columns(
-            (pl.col("score_points") - threshold_points).abs().alias("_dist_seuil")
-        )
+        .group_by(bin_cols)
+        .agg(pl.len().alias("_n_clients"))
+    )
+
+    # Garder le représentant le plus proche du seuil par profil unique
+    deduped = (
+        sub
+        .sort("_dist_seuil")                          # plus proche en premier
+        .unique(subset=bin_cols, keep="first")         # un seul par profil
+        .join(counts, on=bin_cols, how="left")         # rattacher le comptage
         .sort("_dist_seuil")
         .head(n)
         .drop("_dist_seuil")
     )
+
+    return deduped
 
 
 def render_profile_card(
@@ -78,7 +104,21 @@ def render_profile_card(
         )
         st.markdown("".join(html_rows), unsafe_allow_html=True)
 
-
+# Remplacer la ligne du bandeau coloré par :
+if border_color:
+    n_clients = row.get("_n_clients", 1)
+    client_label = f"{n_clients} client{'s' if n_clients > 1 else ''} partagent ce profil"
+    st.markdown(
+        f'<div style="'
+        f'border-left:4px solid {border_color};'
+        f'padding:4px 0 4px 10px;'
+        f'margin-bottom:8px;'
+        f'font-size:11px;color:{border_color};font-weight:600;">'
+        f'Score {score:+d} pts · Proba {proba:.2%}'
+        f'{"  ·  " + client_label if n_clients > 1 else ""}'
+        f'</div>',
+        unsafe_allow_html=True,
+    )
 
 def render_boundary_by_zone(
     segment_df: pl.DataFrame,
