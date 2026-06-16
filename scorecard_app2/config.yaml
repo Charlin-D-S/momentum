@@ -1,0 +1,49 @@
+# ============================================================
+# BNP Scorecard Explorer — configuration
+# ============================================================
+
+data:
+  # Chemin vers le parquet de features brutes (sans colonnes de score)
+  dataset_path: data/dataset_predit.parquet
+  # Chemin vers le parquet de scorecard (Variables, Label, coef, points_1000)
+  scorecard_path: data/scorecard.parquet
+
+columns:
+  # Colonne identifiant individu
+  id: id_client
+  # Colonne cible binaire 0/1 — mettre null pour désactiver la calibration
+  target: defaut_obs
+
+  # ── Aliases d'affichage (facultatif) ──────────────────────
+  # Décommenter et renseigner pour remplacer le nom brut dans l'UI.
+  # Utilisé dans : filtres, tableau scorecard, cartes de profil,
+  # titres de graphiques, tableau de calibration.
+  # aliases:
+  #   anciennete:      "Ancienneté (années)"
+  #   revenus:         "Revenus mensuels (€)"
+  #   nb_transactions: "Nb. transactions/mois"
+  #   incidents:       "Nb. incidents"
+  #   type_client:     "Type de client"
+  #   region:          "Région"
+
+filters:
+  # Liste des variables exposées comme filtres sur la page Segments.
+  # Vide [] = toutes les variables de la scorecard.
+  vars: []
+  # Nombre de filtres par ligne
+  cols_per_row: 3
+
+display:
+  # Nombre de profils à la frontière affichés par seuil
+  n_boundary_profiles: 8
+  # Nombre de quantiles par défaut pour la courbe de calibration
+  default_n_bins_calibration: 10
+  # Nombre de tranches par défaut pour le taux de défaut par score
+  default_n_bins_default_rate: 10
+  # Nombre de voisins utilisés pour la conversion proba → points
+  proba_to_points_neighbors: 50
+
+thresholds:
+  # Valeurs par défaut des seuils de probabilité sur la page Segments
+  default_seuil1: 0.05
+  default_seuil2: 0.15
