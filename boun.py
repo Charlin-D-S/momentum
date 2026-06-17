@@ -1,4 +1,33 @@
 https://cer.business-school.ed.ac.uk/wp-content/uploads/sites/55/2017/02/Piecewise-Logistic-Regression-an-Application-in-Credit-Scoring-Raymond-Anderson.pdf
+[data-testid="stSidebar"] {{
+    background-color: {BG_SURFACE};
+    border-right: 1px solid {BORDER};
+}}
+[data-testid="stSidebar"] h1, [data-testid="stSidebar"] h2 {{
+    color: {BNP_GREEN_DARK};
+}}
+
+/* Liens de navigation multipage (générés depuis pages/) */
+[data-testid="stSidebarNav"] span,
+[data-testid="stSidebarNav"] a,
+[data-testid="stSidebarNavLink"] span,
+[data-testid="stSidebarNavLinkText"] {{
+    color: {TEXT_PRIMARY} !important;
+}}
+
+/* Page active : mise en valeur en vert BNP */
+[data-testid="stSidebarNavLink"][aria-current="page"] span {{
+    color: {BNP_GREEN_DARK} !important;
+    font-weight: 600;
+}}
+
+/* Tout texte générique dans la sidebar (markdown, caption...) */
+[data-testid="stSidebar"] p,
+[data-testid="stSidebar"] label,
+[data-testid="stSidebar"] div {{
+    color: {TEXT_PRIMARY};
+}}
+
 
 [data-testid="stMetric"] {{
     background-color: {BG_SURFACE};
