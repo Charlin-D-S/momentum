@@ -1,4 +1,31 @@
 https://cer.business-school.ed.ac.uk/wp-content/uploads/sites/55/2017/02/Piecewise-Logistic-Regression-an-Application-in-Credit-Scoring-Raymond-Anderson.pdf
+def _clean_scorecard_numeric_cols(sc: pl.DataFrame) -> pl.DataFrame:
+    """
+    Nettoie les colonnes numériques de la scorecard : le sentinel '-'
+    (valeur manquante côté export) est converti en null avant le cast
+    Float64. Gère aussi bien une colonne déjà Utf8 qu'une colonne déjà
+    numérique sans aucun '-'.
+    """
+    return sc.with_columns([
+        pl.col("coef")
+          .cast(pl.Utf8).str.strip_chars()
+          .replace("-", None)
+          .cast(pl.Float64)
+          .alias("coef"),
+        pl.col("points_1000")
+          .cast(pl.Utf8).str.strip_chars()
+          .replace("-", None)
+          .cast(pl.Float64)
+          .alias("points_1000"),
+    ])
+
+
+@st.cache_resource(show_spinner="Chargement de la scorecard...")
+def load_scorecard() -> pl.DataFrame:
+    cfg = get_config()
+    sc = pl.read_parquet(cfg.data.scorecard_path)
+    return _clean_scorecard_numeric_cols(sc)
+
 
 def find_boundary_individuals(
     df: pl.DataFrame,
