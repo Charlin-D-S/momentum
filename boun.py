@@ -1,3 +1,5 @@
+https://cer.business-school.ed.ac.uk/wp-content/uploads/sites/55/2017/02/Piecewise-Logistic-Regression-an-Application-in-Credit-Scoring-Raymond-Anderson.pdf
+
 def find_boundary_individuals(
     df: pl.DataFrame,
     threshold_points: int,
