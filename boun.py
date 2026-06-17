@@ -1,4 +1,23 @@
 https://cer.business-school.ed.ac.uk/wp-content/uploads/sites/55/2017/02/Piecewise-Logistic-Regression-an-Application-in-Credit-Scoring-Raymond-Anderson.pdf
+PLOTLY_LAYOUT = {
+    "font": {"family": "Inter, -apple-system, BlinkMacSystemFont, sans-serif",
+             "color": TEXT_PRIMARY, "size": 12},
+    "paper_bgcolor": BG_SURFACE,
+    "plot_bgcolor": BG_SURFACE,
+    "colorway": [BNP_GREEN, "#0066CC", "#F59E0B", "#8B5CF6", DECISION_RED, TEXT_SECONDARY],
+    "xaxis": {
+        "gridcolor": BORDER, "linecolor": BORDER, "zerolinecolor": BORDER,
+        "tickfont": {"color": TEXT_PRIMARY},
+        "title": {"font": {"color": TEXT_PRIMARY}},
+    },
+    "yaxis": {
+        "gridcolor": BORDER, "linecolor": BORDER, "zerolinecolor": BORDER,
+        "tickfont": {"color": TEXT_PRIMARY},
+        "title": {"font": {"color": TEXT_PRIMARY}},
+    },
+    "margin": {"l": 60, "r": 30, "t": 50, "b": 50},
+}
+
 [data-testid="stSidebar"] {{
     background-color: {BG_SURFACE};
     border-right: 1px solid {BORDER};
