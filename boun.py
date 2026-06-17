@@ -1,4 +1,21 @@
 https://cer.business-school.ed.ac.uk/wp-content/uploads/sites/55/2017/02/Piecewise-Logistic-Regression-an-Application-in-Credit-Scoring-Raymond-Anderson.pdf
+
+[data-testid="stMetric"] {{
+    background-color: {BG_SURFACE};
+    border: 1px solid {BORDER};
+    border-left: 4px solid {BNP_GREEN};
+    padding: 12px 16px;
+    border-radius: 4px;
+}}
+[data-testid="stMetricValue"] {{
+    color: {TEXT_PRIMARY} !important;
+}}
+[data-testid="stMetricLabel"] {{
+    color: {TEXT_SECONDARY} !important;
+}}
+[data-testid="stMetricDelta"] {{
+    color: {TEXT_PRIMARY} !important;
+}}
 def _clean_scorecard_numeric_cols(sc: pl.DataFrame) -> pl.DataFrame:
     """
     Nettoie les colonnes numériques de la scorecard : le sentinel '-'
