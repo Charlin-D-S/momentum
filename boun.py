@@ -1,3 +1,46 @@
+[theme]
+base = "light"
+primaryColor = "#00965E"
+backgroundColor = "#FFFFFF"
+secondaryBackgroundColor = "#E6F5EE"
+textColor = "#1A1A1A"
+font = "sans serif"
+borderColor = "#E5E7EB"
+dataframeBorderColor = "#E5E7EB"
+dataframeHeaderBackgroundColor = "#E6F5EE"
+baseRadius = "small"
+
+/* Boîte du multiselect */
+div[data-testid="stMultiSelect"] div[data-baseweb="select"] > div {{
+    background-color: {BG_SURFACE};
+    border: 1px solid {BORDER};
+    border-radius: 4px;
+}}
+
+/* Tags (pills) des modalités sélectionnées */
+div[data-testid="stMultiSelect"] span[data-baseweb="tag"] {{
+    background-color: {BNP_GREEN} !important;
+    color: white !important;
+}}
+
+/* Texte du tag */
+div[data-testid="stMultiSelect"] span[data-baseweb="tag"] span {{
+    color: white !important;
+}}
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 https://cer.business-school.ed.ac.uk/wp-content/uploads/sites/55/2017/02/Piecewise-Logistic-Regression-an-Application-in-Credit-Scoring-Raymond-Anderson.pdf
 PLOTLY_LAYOUT = {
     "font": {"family": "Inter, -apple-system, BlinkMacSystemFont, sans-serif",
