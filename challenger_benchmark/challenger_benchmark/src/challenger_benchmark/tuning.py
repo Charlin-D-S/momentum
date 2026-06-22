@@ -35,7 +35,8 @@ def _cv_auc(model: ChallengerModel, params: dict, X, y, cfg: TuningConfig) -> fl
     return float(np.mean(scores))
 
 
-def tune(model: ChallengerModel, X, y, cfg: TuningConfig) -> tuple[dict, optuna.Study]:
+def tune(model: ChallengerModel, X, y, cfg: TuningConfig,
+         callbacks=None, show_progress_bar=False) -> tuple[dict, optuna.Study]:
     sampler = optuna.samplers.TPESampler(seed=cfg.seed)
     study = optuna.create_study(direction="maximize", sampler=sampler)
 
@@ -43,5 +44,6 @@ def tune(model: ChallengerModel, X, y, cfg: TuningConfig) -> tuple[dict, optuna.
         params = model.search_space(trial)
         return _cv_auc(model, params, X, y, cfg)
 
-    study.optimize(objective, n_trials=cfg.n_trials, show_progress_bar=False)
+    study.optimize(objective, n_trials=cfg.n_trials, callbacks=callbacks,
+                   show_progress_bar=show_progress_bar)
     return study.best_params, study
