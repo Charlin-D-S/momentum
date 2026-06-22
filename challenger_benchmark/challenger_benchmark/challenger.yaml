@@ -1,0 +1,40 @@
+# Configuration du benchmark de challengers non lineaires.
+# Lance : python -m challenger_benchmark challenger.yaml
+
+data:
+  path: "C:/dev/.../base.parquet"     # parquet unique avec colonne sample
+  target: "defaut_12m"                # cible binaire 0/1
+  sample_col: "sample"
+  train_values: ["train", "val"]      # fusionnes en un seul ensemble d'apprentissage
+  test_value: "test"
+
+drivers:
+  path: "C:/dev/.../drivers.xlsx"
+  variable_col: "Variable"
+  description_col: "Description"
+  type_col: "Type"
+  cat_flag: "c"                        # qualitative
+  num_flag: "q"                        # quantitative
+  risk_driver_col: "Risk_drivers"
+  risk_driver_flag: "RISK_DRIVER"
+
+# Liste explicite, ou la chaine 'all' -> toutes les variables Risk_drivers == RISK_DRIVER
+variables: all
+# variables: ["anciennete", "ca", "secteur", "incident_paiement"]
+
+category_mapping:
+  path: "C:/dev/.../mapping.json"      # { "variable": { "code": "modalite" } }
+
+output_dir: "C:/dev/.../outputs"
+
+tuning:
+  n_trials: 50
+  cv_folds: 5
+  seed: 42
+  metric: auc
+
+shap:
+  sample_size: 5000                    # lignes du test echantillonnees pour SHAP
+  top_n: 20                            # variables affichees dans les figures
+
+models: [logistic_regression, hist_gradient_boosting, xgboost, catboost]
