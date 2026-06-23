@@ -10,6 +10,11 @@ dataframeBorderColor = "#E5E7EB"
 dataframeHeaderBackgroundColor = "#E6F5EE"
 baseRadius = "small"
 
+import shap
+print(shap.__version__)
+shap.TreeExplainer(models_by_name["hist_gradient_boosting"].build({"max_iter": 100}))
+
+pip install --upgrade shap
 /* Boîte du multiselect */
 div[data-testid="stMultiSelect"] div[data-baseweb="select"] > div {{
     background-color: {BG_SURFACE};
