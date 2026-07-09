@@ -9,7 +9,80 @@ Differences clés par rapport à la version pandas :
 - Les plots restent matplotlib/seaborn ; une conversion .to_pandas() minimale
   est faite juste avant chaque appel seaborn, en dehors de toute boucle lourde.
 """
+def plot_bin_stability_over_time(
+    self, var_binned, ref_period=None, min_obs=1, min_pop=0.05, mask=None
+) -> tuple:
+    """Retourne (fig_volume, fig_dr) pour compatibilite Streamlit et notebook."""
+    # ... (agrégation et PSI inchangés) ...
 
+    # -- Graphe 1 : volumes + PSI --
+    fig1, ax1 = plt.subplots(figsize=(13, 5))
+    sns.lineplot(data=agg_pd, x="period", y="pct_obs", hue="bin", marker="o", ax=ax1)
+    ax1.axhline(min_pop, color="grey", linestyle="--", linewidth=1, label="Seuil 5 %")
+    ax1.set_ylabel("Share of population")
+    ax1.set_xlabel("Period")
+    ax1.yaxis.set_major_formatter(lambda x, _: f"{x:.0%}")
+    ax1.tick_params(axis="x", rotation=45)
+    ax1.set_title("Evolution of population shares by class with PSI")
+
+    ax2 = ax1.twinx()
+    ax2.plot(psi_pd["period"], psi_pd["psi"],
+             color="black", linestyle="--", marker="s", label="PSI")
+    ax2.axhline(0.10, color="orange", linestyle=":")
+    ax2.axhline(0.25, color="red",    linestyle=":")
+    ax2.set_ylabel("PSI")
+
+    lines1, labels1 = ax1.get_legend_handles_labels()
+    lines2, labels2 = ax2.get_legend_handles_labels()
+    ax1.legend(lines1 + lines2, labels1 + labels2,
+               bbox_to_anchor=(1.02, 1), loc="upper left")
+    fig1.tight_layout()
+
+    # -- Graphe 2 : taux de défaut --
+    fig2, ax3 = plt.subplots(figsize=(13, 5))
+    sns.lineplot(
+        data=agg_pd[agg_pd["n_obs"] >= min_obs],
+        x="period", y="default_rate", hue="bin", marker="o", ax=ax3,
+    )
+    ax3.yaxis.set_major_formatter(lambda x, _: f"{x:.0%}")
+    ax3.axhline(global_dr, color="black", linestyle="--", label="DR global")
+    ax3.set_title("Evolution of default rate by class")
+    ax3.set_ylabel("Default rate (%)")
+    ax3.set_xlabel("Period")
+    ax3.tick_params(axis="x", rotation=45)
+    ax3.legend(bbox_to_anchor=(1.02, 1), loc="upper left")
+    fig2.tight_layout()
+
+    return fig1, fig2   # <-- plus de plt.show()
+
+import streamlit as st
+import polars as pl
+from binner_polars import Binner
+
+st.title("Stabilité des bins")
+
+# --- Sidebar : paramètres ---
+var      = st.sidebar.selectbox("Variable binnée", options=df.columns)
+ref_year = st.sidebar.selectbox("Période de référence", options=sorted(df["annee"].unique().to_list()))
+min_obs  = st.sidebar.slider("Observations minimum (DR)", 1, 100, 10)
+min_pop  = st.sidebar.slider("Seuil volume (%)", 0.0, 0.2, 0.05, step=0.01)
+
+# --- Calcul ---
+b = Binner(df, cible_col="default", date_col="annee")
+
+fig_vol, fig_dr = b.plot_bin_stability_over_time(
+    var_binned=var,
+    ref_period=ref_year,
+    min_obs=min_obs,
+    min_pop=min_pop,
+)
+
+# --- Affichage ---
+st.subheader("Volumes et PSI")
+st.pyplot(fig_vol)
+
+st.subheader("Taux de défaut par classe")
+st.pyplot(fig_dr)
 from __future__ import annotations
 
 import re
