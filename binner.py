@@ -9,6 +9,12 @@ Changements cles :
 - Reste inchange  : compute_psi, v_cramer_t_tschuprow, discretise_with_manual_thresholds,
                     merge_modalities, extract_binning_thresholds, apply_binning_thresholds.
 """
+fig1, fig2 = b.plot_bin_stability_over_time("ma_var")
+st.plotly_chart(fig1, use_container_width=True)
+st.plotly_chart(fig2, use_container_width=True)
+
+fig_cat = b.plot_categorical_distribution("ma_var_cat")
+st.plotly_chart(fig_cat, use_container_width=True)
 
 from __future__ import annotations
 
