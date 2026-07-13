@@ -1,26 +1,23 @@
-"""Binner — version Polars.
+"""Binner — version Polars + Plotly.
 
-Differences cles par rapport a la version pandas :
-- self.X est un pl.DataFrame (immutable) ; les methodes qui modifient une
-  colonne retournent toujours la Series modifiee ET mettent a jour self.X
-  via with_columns (pas de mutation en place).
-- mask : pl.Series booleenne ou pl.Expr, passee a filter().
-- v_cramer_t_tschuprow : prend une pl.Series (au lieu d'une pd.Series).
-- plot_bin_stability_over_time retourne (fig1, fig2) pour Streamlit et notebook.
-  En notebook : display(fig1); display(fig2)
-  En Streamlit : st.pyplot(fig1); st.pyplot(fig2)
-- Les plots restent matplotlib/seaborn ; conversion .to_pandas() minimale
-  faite une seule fois avant chaque appel seaborn.
+Changements cles :
+- Graphiques en Plotly (hover riche : effectifs, nb defauts, taux, PSI...).
+- plot_bin_stability_over_time retourne (fig_vol, fig_dr) : go.Figure.
+- plot_categorical_distribution retourne un go.Figure.
+- Usage Streamlit : st.plotly_chart(fig, use_container_width=True)
+- Usage notebook  : fig.show()
+- Reste inchange  : compute_psi, v_cramer_t_tschuprow, discretise_with_manual_thresholds,
+                    merge_modalities, extract_binning_thresholds, apply_binning_thresholds.
 """
 
 from __future__ import annotations
 
 import re
 
-import matplotlib.pyplot as plt
 import numpy as np
 import polars as pl
-import seaborn as sns
+import plotly.graph_objects as go
+from plotly.subplots import make_subplots
 from scipy.stats import chi2_contingency
 
 
@@ -41,7 +38,6 @@ class Binner:
     # ------------------------------------------------------------------
 
     def _filter(self, mask=None) -> pl.DataFrame:
-        """Applique un masque (pl.Series bool ou pl.Expr) ou renvoie self.X."""
         if mask is None:
             return self.X
         return self.X.filter(mask)
@@ -52,13 +48,19 @@ class Binner:
         cur_dist: np.ndarray,
         eps: float = 1e-6,
     ) -> float:
-        """PSI entre deux distributions (vecteurs numpy normalises)."""
         return float(
             np.sum(
                 (ref_dist - cur_dist)
                 * np.log((ref_dist + eps) / (cur_dist + eps))
             )
         )
+
+    def _psi_label(self, psi: float) -> str:
+        if psi < 0.10:
+            return f"{psi:.4f} ✅ stable"
+        if psi < 0.25:
+            return f"{psi:.4f} ⚠️ attention"
+        return f"{psi:.4f} 🔴 instable"
 
     # ------------------------------------------------------------------
     # STABILITE DES BINS DANS LE TEMPS
@@ -71,19 +73,20 @@ class Binner:
         min_obs: int = 1,
         min_pop: float = 0.05,
         mask=None,
-    ) -> tuple:
-        """Volumes par bin et taux de defaut au fil du temps, avec PSI.
+    ) -> tuple[go.Figure, go.Figure]:
+        """Retourne (fig_vol, fig_dr) — figures Plotly interactives.
 
-        Retourne (fig1, fig2) — aucun plt.show() interne.
+        fig_vol : volumes par bin (%) + PSI sur axe secondaire.
+        fig_dr  : taux de defaut par bin.
+        Hover : effectif, nb defauts, taux de defaut, part population, PSI.
         """
         X = self._filter(mask)
+        global_dr = float(X[self.cible_col].cast(pl.Float64).mean())
 
         # -- Agregation Polars ----------------------------------------
         agg = (
             X.select([var_binned, self.cible_col, self.date_col])
-            .rename(
-                {var_binned: "bin", self.cible_col: "target", self.date_col: "period"}
-            )
+            .rename({var_binned: "bin", self.cible_col: "target", self.date_col: "period"})
             .group_by(["period", "bin"])
             .agg(
                 pl.col("target").count().alias("n_obs"),
@@ -111,82 +114,156 @@ class Binner:
         if ref_period is None:
             ref_period = agg["period"].min()
 
-        ref_rows = (
-            agg.filter(pl.col("period") == ref_period)
-            .select(["bin", "n_obs"])
-        )
+        ref_rows = agg.filter(pl.col("period") == ref_period).select(["bin", "n_obs"])
         ref_total = ref_rows["n_obs"].sum()
-        ref_dict = {
-            row["bin"]: row["n_obs"] / ref_total
-            for row in ref_rows.to_dicts()
-        }
+        ref_dict = {r["bin"]: r["n_obs"] / ref_total for r in ref_rows.to_dicts()}
 
         psi_records = []
         for period in sorted(agg["period"].unique().to_list()):
-            cur_rows = (
-                agg.filter(pl.col("period") == period)
-                .select(["bin", "n_obs"])
-            )
+            cur_rows = agg.filter(pl.col("period") == period).select(["bin", "n_obs"])
             cur_total = cur_rows["n_obs"].sum()
-            cur_dict = {
-                row["bin"]: row["n_obs"] / cur_total
-                for row in cur_rows.to_dicts()
-            }
+            cur_dict = {r["bin"]: r["n_obs"] / cur_total for r in cur_rows.to_dicts()}
             all_bins = list(ref_dict.keys())
-            ref_arr = np.array([ref_dict.get(b, 0.0) for b in all_bins])
-            cur_arr = np.array([cur_dict.get(b, 0.0) for b in all_bins])
-            psi_records.append({"period": period, "psi": self.compute_psi(ref_arr, cur_arr)})
+            psi_val = self.compute_psi(
+                np.array([ref_dict.get(b, 0.0) for b in all_bins]),
+                np.array([cur_dict.get(b, 0.0) for b in all_bins]),
+            )
+            psi_records.append({"period": period, "psi": psi_val})
 
-        psi_df = pl.DataFrame(psi_records)
+        psi_df = pl.DataFrame(psi_records).sort("period")
 
-        # -- Conversion pandas (une seule fois, avant tout appel seaborn) --
-        agg_pd    = agg.to_pandas()
-        psi_pd    = psi_df.to_pandas()
-        global_dr = X[self.cible_col].cast(pl.Float64).mean()
+        # -- Conversion pandas pour iteration Plotly ------------------
+        agg_pd = agg.to_pandas()
+        psi_pd = psi_df.to_pandas()
 
-        # -- Graphe 1 : volumes + PSI ---------------------------------
-        fig1, ax1 = plt.subplots(figsize=(13, 5))
-        sns.lineplot(
-            data=agg_pd, x="period", y="pct_obs", hue="bin", marker="o", ax=ax1
+        # Ordre des bins (tri sur la borne gauche si format [a, b))
+        def _bin_sort_key(b: str) -> float:
+            m = re.match(r"[\[\(]([^,]+),", str(b))
+            if m:
+                v = m.group(1).strip()
+                return float("-inf") if v in ("-inf", "-Inf") else float(v)
+            return float("inf")
+
+        bins_ordered = sorted(agg_pd["bin"].unique(), key=_bin_sort_key)
+
+        # -- Figure 1 : volumes + PSI ---------------------------------
+        fig1 = make_subplots(specs=[[{"secondary_y": True}]])
+
+        for bin_name in bins_ordered:
+            d = agg_pd[agg_pd["bin"] == bin_name].sort_values("period")
+            fig1.add_trace(
+                go.Scatter(
+                    x=d["period"],
+                    y=d["pct_obs"],
+                    name=str(bin_name),
+                    mode="lines+markers",
+                    customdata=d[["n_obs", "n_defaults", "default_rate", "total_period"]].values,
+                    hovertemplate=(
+                        "<b>Période : %{x}</b><br>"
+                        f"Bin : {bin_name}<br>"
+                        "Part population : <b>%{y:.1%}</b><br>"
+                        "Effectif : %{customdata[0]:,.0f}<br>"
+                        "Nb défauts : %{customdata[1]:,.0f}<br>"
+                        "Taux de défaut : %{customdata[2]:.2%}<br>"
+                        "Total période : %{customdata[3]:,.0f}"
+                        "<extra></extra>"
+                    ),
+                ),
+                secondary_y=False,
+            )
+
+        # Seuil population minimum
+        fig1.add_hline(
+            y=min_pop, line_dash="dash", line_color="grey",
+            annotation_text=f"Seuil {min_pop:.0%}",
+            annotation_position="bottom right",
+            secondary_y=False,
         )
-        ax1.axhline(min_pop, color="grey", linestyle="--", linewidth=1, label="Seuil 5 %")
-        ax1.set_ylabel("Share of population")
-        ax1.set_xlabel("Period")
-        ax1.yaxis.set_major_formatter(lambda x, _: f"{x:.0%}")
-        ax1.tick_params(axis="x", rotation=45)
-        ax1.set_title("Evolution of population shares by class with PSI")
 
-        ax2 = ax1.twinx()
-        ax2.plot(
-            psi_pd["period"], psi_pd["psi"],
-            color="black", linestyle="--", marker="s", label="PSI",
+        # Courbe PSI
+        psi_pd["psi_label"] = psi_pd["psi"].apply(self._psi_label)
+        fig1.add_trace(
+            go.Scatter(
+                x=psi_pd["period"],
+                y=psi_pd["psi"],
+                name="PSI",
+                mode="lines+markers",
+                marker=dict(symbol="square", color="black", size=7),
+                line=dict(color="black", dash="dash"),
+                customdata=psi_pd[["psi_label"]].values,
+                hovertemplate=(
+                    "<b>Période : %{x}</b><br>"
+                    "PSI : %{customdata[0]}<br>"
+                    f"Référence : {ref_period}"
+                    "<extra></extra>"
+                ),
+            ),
+            secondary_y=True,
         )
-        ax2.axhline(0.10, color="orange", linestyle=":")
-        ax2.axhline(0.25, color="red",    linestyle=":")
-        ax2.set_ylabel("PSI")
 
-        lines1, labels1 = ax1.get_legend_handles_labels()
-        lines2, labels2 = ax2.get_legend_handles_labels()
-        ax1.legend(
-            lines1 + lines2, labels1 + labels2,
-            bbox_to_anchor=(1.02, 1), loc="upper left",
-        )
-        fig1.tight_layout()
+        # Seuils PSI
+        for y_val, color, label in [(0.10, "orange", "PSI 0.10"), (0.25, "red", "PSI 0.25")]:
+            fig1.add_hline(
+                y=y_val, line_dash="dot", line_color=color,
+                annotation_text=label,
+                annotation_position="top right",
+                secondary_y=True,
+            )
 
-        # -- Graphe 2 : taux de defaut par bin ------------------------
-        fig2, ax3 = plt.subplots(figsize=(13, 5))
-        sns.lineplot(
-            data=agg_pd[agg_pd["n_obs"] >= min_obs],
-            x="period", y="default_rate", hue="bin", marker="o", ax=ax3,
+        fig1.update_layout(
+            title=f"Evolution des parts de population par bin — PSI (ref : {ref_period})",
+            hovermode="x unified",
+            legend=dict(orientation="v", x=1.08),
+            height=500,
         )
-        ax3.yaxis.set_major_formatter(lambda x, _: f"{x:.0%}")
-        ax3.axhline(global_dr, color="black", linestyle="--", label="DR global")
-        ax3.set_title("Evolution of default rate by class")
-        ax3.set_ylabel("Default rate (%)")
-        ax3.set_xlabel("Period")
-        ax3.tick_params(axis="x", rotation=45)
-        ax3.legend(bbox_to_anchor=(1.02, 1), loc="upper left")
-        fig2.tight_layout()
+        fig1.update_yaxes(title_text="Part de population (%)", tickformat=".0%", secondary_y=False)
+        fig1.update_yaxes(title_text="PSI", secondary_y=True)
+        fig1.update_xaxes(title_text="Période")
+
+        # -- Figure 2 : taux de défaut --------------------------------
+        fig2 = go.Figure()
+
+        agg_filtered = agg_pd[agg_pd["n_obs"] >= min_obs]
+
+        for bin_name in bins_ordered:
+            d = agg_filtered[agg_filtered["bin"] == bin_name].sort_values("period")
+            if d.empty:
+                continue
+            fig2.add_trace(
+                go.Scatter(
+                    x=d["period"],
+                    y=d["default_rate"],
+                    name=str(bin_name),
+                    mode="lines+markers",
+                    customdata=d[["n_obs", "n_defaults", "pct_obs", "total_period"]].values,
+                    hovertemplate=(
+                        "<b>Période : %{x}</b><br>"
+                        f"Bin : {bin_name}<br>"
+                        "Taux de défaut : <b>%{y:.2%}</b><br>"
+                        "Effectif : %{customdata[0]:,.0f}<br>"
+                        "Nb défauts : %{customdata[1]:,.0f}<br>"
+                        "Part population : %{customdata[2]:.1%}<br>"
+                        "Total période : %{customdata[3]:,.0f}"
+                        "<extra></extra>"
+                    ),
+                )
+            )
+
+        # DR global
+        fig2.add_hline(
+            y=global_dr, line_dash="dash", line_color="black",
+            annotation_text=f"DR global {global_dr:.2%}",
+            annotation_position="bottom right",
+        )
+
+        fig2.update_layout(
+            title="Evolution du taux de défaut par bin",
+            hovermode="x unified",
+            legend=dict(orientation="v", x=1.08),
+            height=500,
+            yaxis=dict(title="Taux de défaut (%)", tickformat=".2%"),
+            xaxis=dict(title="Période"),
+        )
 
         return fig1, fig2
 
@@ -194,46 +271,67 @@ class Binner:
     # DISTRIBUTION D'UNE VARIABLE CATEGORIELLE
     # ------------------------------------------------------------------
 
-    def plot_categorical_distribution(self, var: str, mask=None) -> None:
+    def plot_categorical_distribution(self, var: str, mask=None) -> go.Figure:
+        """Retourne un go.Figure — barres groupees avec hover riche."""
         X = self._filter(mask)
-        cramers_v, _ = self.v_cramer_t_tschuprow(X[var])
+        cramers_v, tschuprow_t = self.v_cramer_t_tschuprow(X[var])
 
-        ct = (
+        # Tableau de contingence : effectifs bruts + pourcentages
+        ct_raw = (
             X.select([var, self.cible_col])
             .group_by([var, self.cible_col])
             .agg(pl.len().alias("n"))
             .pivot(on=self.cible_col, index=var, values="n")
             .fill_null(0)
         )
-        target_cols = [c for c in ct.columns if c != var]
-        ct_pd = ct.to_pandas().set_index(var)
-        ct_pd[target_cols] = ct_pd[target_cols].div(
-            ct_pd[target_cols].sum(axis=1), axis=0
-        ) * 100
+        target_cols = [c for c in ct_raw.columns if c != var]
+        ct_pd = ct_raw.to_pandas().set_index(var)
+        row_totals = ct_pd[target_cols].sum(axis=1)
+        ct_pct = ct_pd[target_cols].div(row_totals, axis=0) * 100
 
-        table = ct_pd.reset_index().melt(
-            id_vars=var, var_name=self.cible_col, value_name="percentage"
+        fig = go.Figure()
+        for t in target_cols:
+            fig.add_trace(
+                go.Bar(
+                    name=f"Cible = {t}",
+                    x=ct_pct.index.astype(str),
+                    y=ct_pct[t],
+                    customdata=np.column_stack([
+                        ct_pd[t].values,
+                        row_totals.values,
+                    ]),
+                    hovertemplate=(
+                        "<b>%{x}</b><br>"
+                        f"Cible : {t}<br>"
+                        "Part : <b>%{y:.1f}%</b><br>"
+                        "Effectif : %{customdata[0]:,.0f}<br>"
+                        "Total modalité : %{customdata[1]:,.0f}"
+                        "<extra></extra>"
+                    ),
+                    text=ct_pct[t].apply(lambda v: f"{v:.1f}%"),
+                    textposition="outside",
+                )
+            )
+
+        fig.update_layout(
+            barmode="group",
+            title=(
+                f"Distribution de la cible par modalité — {var}<br>"
+                f"<sup>V de Cramér : {cramers_v:.3f} | T de Tschuprow : {tschuprow_t:.3f}</sup>"
+            ),
+            yaxis=dict(title="Part (%)"),
+            xaxis=dict(title=var),
+            legend=dict(orientation="h", y=-0.15),
+            height=480,
         )
 
-        plt.figure(figsize=(8, 5))
-        ax = sns.barplot(
-            x=var, y="percentage", hue=self.cible_col,
-            data=table, palette="Set2",
-        )
-        plt.title("Default distribution (%) by categorical variable")
-        for container in ax.containers:
-            ax.bar_label(container, fmt="%.1f%%", label_type="edge", fontsize=8)
-        plt.suptitle(f"V Cramer: {cramers_v:.3f}", y=1.02, fontsize=10)
-        plt.show()
+        return fig
 
     # ------------------------------------------------------------------
     # CRAMER'S V & TSCHUPROW'S T
     # ------------------------------------------------------------------
 
-    def v_cramer_t_tschuprow(
-        self, var_col: pl.Series
-    ) -> tuple[float, float]:
-        """Prend une pl.Series ; utilise self.X[self.cible_col] comme cible."""
+    def v_cramer_t_tschuprow(self, var_col: pl.Series) -> tuple[float, float]:
         temp = pl.DataFrame(
             {"_var": var_col.cast(pl.String), "_target": self.X[self.cible_col]}
         )
@@ -244,17 +342,13 @@ class Binner:
             .fill_null(0)
         )
         ct_np = ct_pl.drop("_var").to_numpy().astype(float)
-
         n = ct_np.sum()
         chi2, _, _, _ = chi2_contingency(ct_np, correction=False)
         r, k = ct_np.shape
-
         denom_v = n * (min(r - 1, k - 1))
         cramers_v = float(np.sqrt(chi2 / denom_v)) if denom_v > 0 else float("nan")
-
         denom_t = n * np.sqrt((r - 1) * (k - 1))
         tschuprows_t = float(np.sqrt(chi2 / denom_t)) if denom_t > 0 else float("nan")
-
         return cramers_v, tschuprows_t
 
     # ------------------------------------------------------------------
@@ -268,15 +362,8 @@ class Binner:
         labels: list | None = None,
         missing_label: str = "Missing",
     ) -> pl.Series:
-        """Discretise une variable quantitative avec des seuils manuels.
-
-        Equivalent a pd.cut(..., right=False) -> left_closed=True dans Polars.
-        Les null sont preserves puis remplaces par missing_label.
-        Met a jour self.X et retourne la Series resultante.
-        """
         if sorted(thresholds) != thresholds:
             raise ValueError("Les seuils doivent etre strictement croissants.")
-
         result = (
             self.X[var_quant]
             .cut(breaks=thresholds, labels=labels, left_closed=True)
@@ -292,64 +379,36 @@ class Binner:
     # ------------------------------------------------------------------
 
     def merge_modalities(self, col: str, mapping: dict) -> None:
-        """Fusionne des modalites via un dictionnaire {ancienne: nouvelle}.
-
-        Leve ValueError si des valeurs restent non mappees.
-        Met a jour self.X.
-        """
-        merged = (
-            self.X[col]
-            .cast(pl.String)
-            .replace(mapping)
-        )
-
+        merged = self.X[col].cast(pl.String).replace(mapping)
         nulls_after = merged.is_null()
         if nulls_after.any():
-            unmapped = (
-                self.X.filter(nulls_after)[col]
-                .unique()
-                .to_list()
-            )
-            raise ValueError(f"Modalites non mappees detectees : {unmapped}")
-
-        self.X = self.X.with_columns(
-            merged.cast(pl.Categorical).alias(col)
-        )
+            unmapped = self.X.filter(nulls_after)[col].unique().to_list()
+            raise ValueError(f"Modalites non mappees : {unmapped}")
+        self.X = self.X.with_columns(merged.cast(pl.Categorical).alias(col))
 
     # ------------------------------------------------------------------
     # EXTRACTION ET APPLICATION DES SEUILS
     # ------------------------------------------------------------------
 
     def extract_binning_thresholds(self, X_binned: pl.DataFrame) -> dict:
-        """Extrait les seuils depuis les libelles de bins de type [a, b).
-
-        Retourne : {variable: {'cuts': [...], 'has_missing': bool}}
-        """
         thresholds = {}
         for var in X_binned.columns:
             categories = (
-                X_binned[var]
-                .cast(pl.String)
-                .unique()
-                .drop_nulls()
-                .to_list()
+                X_binned[var].cast(pl.String).unique().drop_nulls().to_list()
             )
             has_missing = "Missing" in categories
             bounds: set[float] = set()
-
             for cat in categories:
                 if cat == "Missing":
                     continue
-                match = re.match(r"[\[\(]([^,]+),\s*([^\]\)]+)[\]\)]", cat)
-                if match:
-                    left, right = match.groups()
+                m = re.match(r"[\[\(]([^,]+),\s*([^\]\)]+)[\]\)]", cat)
+                if m:
+                    left, right = m.groups()
                     if left.strip() not in ("-inf", "-Inf"):
                         bounds.add(float(left))
                     if right.strip() not in ("inf", "Inf"):
                         bounds.add(float(right))
-
             thresholds[var] = {"cuts": sorted(bounds), "has_missing": has_missing}
-
         return thresholds
 
     def apply_binning_thresholds(
@@ -358,13 +417,8 @@ class Binner:
         X_new: pl.DataFrame,
         suffix: str = "",
     ) -> pl.DataFrame:
-        """Applique les seuils extraits de X_binned a X_new.
-
-        Retourne un nouveau pl.DataFrame avec les colonnes binnees.
-        """
         thresholds = self.extract_binning_thresholds(X_binned)
         cols = []
-
         for var, info in thresholds.items():
             binned = (
                 X_new[var]
@@ -375,5 +429,4 @@ class Binner:
                 .alias(var + suffix)
             )
             cols.append(binned)
-
         return pl.DataFrame(cols)
