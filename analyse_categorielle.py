@@ -1,3 +1,20 @@
+df.with_columns(
+    pl.col("ma_date")
+    .dt.month()
+    .map_elements(lambda m: (m - 1) // 3 * 3 + 1, return_dtype=pl.Int32)
+    .alias("_mois_debut")
+).with_columns(
+    pl.date(
+        pl.col("ma_date").dt.year(),
+        pl.col("_mois_debut"),
+        1
+    ).alias("debut_trimestre")
+).drop("_mois_debut")
+
+
+
+
+
 import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
