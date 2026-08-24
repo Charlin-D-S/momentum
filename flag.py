@@ -1,193 +1,155 @@
 """
-Affichage Streamlit + export Excel des matrices de transition flag1 x flag2.
+Matrices de transition flag1 x flag2 en Polars (+ rendu coloré via pandas Styler).
 
-Dépend de matrice_transition.py (croise / en_pourcentage / avec_marges / ORDRE).
-Les couleurs à l'écran et dans le fichier Excel sont calculées par la MÊME
-fonction, donc le rendu est identique dans les deux.
+4 matrices :
+  1. effectifs (n)
+  2. pourcentages d'effectifs
+  3. montants sommés
+  4. pourcentages de montants
+
+Normalisation des % : "all" (sur le total), "row" (par ligne = vraie matrice de
+transition), "col" (par colonne).
 """
 
-from io import BytesIO
-
-import matplotlib
-import pandas as pd
 import polars as pl
-from openpyxl import Workbook
-from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
-from openpyxl.utils import get_column_letter
+import pandas as pd
 
-from matrice_transition import ORDRE, avec_marges, croise, en_pourcentage
-
-# ----------------------------------------------------------------- couleurs
-GRIS_TOTAL = "EEEEEE"
-BORDURE = Border(*[Side(style="thin", color="D9D9D9")] * 4)
+ORDRE = ["vert", "orange", "rouge"]  # ordre d'affichage des modalités
 
 
-def _to_pd(m: pl.DataFrame, f1: str = "flag1") -> pd.DataFrame:
-    """Polars -> pandas indexé (sans passer par pyarrow)."""
-    return pd.DataFrame(m.to_dict(as_series=False)).set_index(f1)
+# ---------------------------------------------------------------- coeur Polars
+def croise(
+    df: pl.DataFrame,
+    f1: str = "flag1",
+    f2: str = "flag2",
+    valeur: str | None = None,
+    ordre: list[str] = ORDRE,
+) -> pl.DataFrame:
+    """Tableau croisé : effectifs si valeur is None, sinon somme de `valeur`."""
+    agg = pl.len().alias("v") if valeur is None else pl.col(valeur).sum().alias("v")
+
+    long = (
+        df.group_by([f1, f2])
+        .agg(agg)
+        .with_columns(pl.col("v").cast(pl.Float64))
+    )
+
+    wide = long.pivot(on=f2, index=f1, values="v", aggregate_function=None)
+
+    # colonnes/lignes manquantes -> 0, puis remise dans l'ordre voulu
+    for c in ordre:
+        if c not in wide.columns:
+            wide = wide.with_columns(pl.lit(0.0).alias(c))
+    wide = wide.select([f1] + ordre).fill_null(0.0)
+
+    manquantes = [m for m in ordre if m not in wide[f1].to_list()]
+    if manquantes:
+        vide = pl.DataFrame(
+            {f1: manquantes, **{c: [0.0] * len(manquantes) for c in ordre}}
+        )
+        wide = pl.concat([wide, vide], how="vertical")
+
+    return (
+        wide.with_columns(pl.col(f1).cast(pl.Enum(ordre)))
+        .sort(f1)
+        .with_columns(pl.col(f1).cast(pl.Utf8))
+    )
 
 
-def _hex(cmap_name: str, x: float) -> str:
-    """x dans [0,1] -> 'RRGGBB'. Plage 0.08-0.75 pour garder du texte lisible."""
-    cmap = matplotlib.colormaps[cmap_name]
-    r, g, b, _ = cmap(0.08 + 0.67 * max(0.0, min(1.0, x)))
-    return f"{int(r*255):02X}{int(g*255):02X}{int(b*255):02X}"
+def en_pourcentage(m: pl.DataFrame, f1: str = "flag1", how: str = "row",
+                   ordre: list[str] = ORDRE) -> pl.DataFrame:
+    """Convertit une matrice de comptes/montants en % (row / col / all)."""
+    if how == "row":
+        total = pl.sum_horizontal(ordre)
+        return m.with_columns([
+            pl.when(total > 0).then(pl.col(c) / total * 100).otherwise(0.0).alias(c)
+            for c in ordre
+        ])
+    if how == "col":
+        return m.with_columns([
+            pl.when(pl.col(c).sum() > 0)
+            .then(pl.col(c) / pl.col(c).sum() * 100).otherwise(0.0).alias(c)
+            for c in ordre
+        ])
+    if how == "all":
+        tot = sum(m[c].sum() for c in ordre)
+        return m.with_columns([(pl.col(c) / tot * 100).alias(c) for c in ordre])
+    raise ValueError("how ∈ {'row','col','all'}")
 
 
-def _echelle(pdf: pd.DataFrame, cols: list[str]) -> tuple[float, float]:
-    bloc = pdf.loc[[i for i in pdf.index if i != "Total"], cols]
-    return float(bloc.min().min()), float(bloc.max().max())
+def avec_marges(m: pl.DataFrame, f1: str = "flag1",
+                ordre: list[str] = ORDRE) -> pl.DataFrame:
+    """Ajoute une colonne Total et une ligne Total."""
+    m = m.with_columns(pl.sum_horizontal(ordre).alias("Total"))
+    ligne = pl.DataFrame({f1: ["Total"],
+                          **{c: [m[c].sum()] for c in ordre + ["Total"]}})
+    return pl.concat([m, ligne], how="vertical")
 
 
-# ------------------------------------------------------------------ Streamlit
-def styler(m: pl.DataFrame, fmt: str = "{:,.0f}", cmap: str = "Blues",
-           f1: str = "flag1"):
-    """Styler pandas prêt pour st.dataframe (dégradé + totaux en gras)."""
-    pdf = _to_pd(m, f1)
+# ------------------------------------------------------------------ affichage
+def colorer(m: pl.DataFrame, titre: str, f1: str = "flag1",
+            fmt: str = "{:,.0f}", cmap: str = "Blues"):
+    """Rend la matrice colorée (dégradé par intensité). À afficher en notebook."""
+    pdf = pd.DataFrame(m.to_dict(as_series=False)).set_index(f1)  # pas besoin de pyarrow
     cols = [c for c in pdf.columns if c != "Total"]
-    lo, hi = _echelle(pdf, cols)
+    sty = (
+        pdf.style
+        .background_gradient(cmap=cmap, subset=cols, axis=None)
+        .format(fmt)
+        .set_caption(titre)
+        .set_table_styles([
+            {"selector": "caption",
+             "props": "caption-side:top; font-size:1.05em; font-weight:600; padding:6px;"},
+            {"selector": "th", "props": "background-color:#f2f2f2;"},
+        ])
+    )
+    if "Total" in pdf.columns:
+        sty = sty.set_properties(subset=["Total"], **{"font-weight": "bold",
+                                                      "background-color": "#eeeeee"})
+    return sty
 
-    def couleur(val, ligne):
-        if ligne == "Total":
-            return f"background-color:#{GRIS_TOTAL};font-weight:600;"
-        x = 0.5 if hi == lo else (val - lo) / (hi - lo)
-        h = _hex(cmap, x)
-        txt = "#FFFFFF" if x > 0.6 else "#111111"
-        return f"background-color:#{h};color:{txt};"
+
+def colorer_feu(m: pl.DataFrame, titre: str, f1: str = "flag1",
+                fmt: str = "{:,.1f}"):
+    """Variante : couleur = dégradation (rouge) / amélioration (vert) du flag."""
+    rang = {c: i for i, c in enumerate(ORDRE)}
+
+    def style_cell(val, i, j):
+        d = rang[j] - rang[i]                       # >0 = dégradation
+        if d == 0:
+            return "background-color:#e8e8e8;"
+        base = "#c00000" if d > 0 else "#1a7f37"
+        alpha = 0.18 + 0.22 * abs(d)
+        return f"background-color:{base}{int(alpha*255):02x};"
+
+    pdf = pd.DataFrame(m.to_dict(as_series=False)).set_index(f1)  # pas besoin de pyarrow
+    cols = [c for c in pdf.columns if c != "Total"]
 
     def appliquer(df):
         out = pd.DataFrame("", index=df.index, columns=df.columns)
         for i in df.index:
             for j in cols:
-                out.loc[i, j] = couleur(df.loc[i, j], i)
-            if "Total" in df.columns:
-                out.loc[i, "Total"] = f"background-color:#{GRIS_TOTAL};font-weight:600;"
+                if i in rang and j in rang:
+                    out.loc[i, j] = style_cell(df.loc[i, j], i, j)
         return out
 
-    return pdf.style.apply(appliquer, axis=None).format(fmt)
+    return (pdf.style.apply(appliquer, axis=None).format(fmt)
+            .set_caption(titre)
+            .set_table_styles([{"selector": "caption",
+                                "props": "caption-side:top;font-weight:600;padding:6px;"}]))
 
 
-def afficher(st, m: pl.DataFrame, titre: str, fmt="{:,.0f}", cmap="Blues"):
-    """Affiche une matrice colorée dans Streamlit."""
-    st.markdown(f"**{titre}**")
-    st.dataframe(styler(m, fmt=fmt, cmap=cmap), use_container_width=True)
+def exporter_html(styles, chemin="matrices.html"):
+    """Écrit plusieurs Styler dans un seul fichier HTML."""
+    html = "<meta charset='utf-8'><style>table{border-collapse:collapse;margin:18px 0;}"\
+           "td,th{border:1px solid #ddd;padding:6px 12px;text-align:right;}</style>"
+    html += "".join(s.to_html() for s in styles)
+    with open(chemin, "w", encoding="utf-8") as f:
+        f.write(html)
+    return chemin
 
 
-# --------------------------------------------------------------------- Excel
-def to_excel(blocs: list[dict], f1: str = "flag1", une_feuille: bool = True) -> bytes:
-    """
-    blocs = [{"titre":..., "df": pl.DataFrame, "cmap": "Blues",
-              "fmt": "#,##0" ou '0.0"%"'}, ...]
-    Renvoie les octets du .xlsx (à passer à st.download_button).
-    """
-    wb = Workbook()
-    wb.remove(wb.active)
-    if une_feuille:
-        ws = wb.create_sheet("Matrices")
-    ligne = 1
-
-    for k, bloc in enumerate(blocs):
-        pdf = _to_pd(bloc["df"], f1)
-        cols = list(pdf.columns)
-        num = [c for c in cols if c != "Total"]
-        lo, hi = _echelle(pdf, num)
-        cmap, fmt = bloc.get("cmap", "Blues"), bloc.get("fmt", "#,##0")
-
-        if not une_feuille:
-            ws = wb.create_sheet(bloc["titre"][:31].replace("/", "-"))
-            ligne = 1
-
-        # titre
-        c = ws.cell(row=ligne, column=1, value=bloc["titre"])
-        c.font = Font(bold=True, size=12)
-        ligne += 1
-
-        # en-tête
-        ws.cell(row=ligne, column=1, value=f"{f1} \\ flag2").font = Font(bold=True)
-        for j, nom in enumerate(cols, start=2):
-            h = ws.cell(row=ligne, column=j, value=nom)
-            h.font = Font(bold=True)
-            h.alignment = Alignment(horizontal="center")
-            h.fill = PatternFill("solid", fgColor="F2F2F2")
-            h.border = BORDURE
-        ligne += 1
-
-        # corps
-        for idx in pdf.index:
-            r = ws.cell(row=ligne, column=1, value=idx)
-            r.font = Font(bold=(idx == "Total"))
-            r.fill = PatternFill("solid", fgColor="F2F2F2")
-            r.border = BORDURE
-            for j, nom in enumerate(cols, start=2):
-                val = float(pdf.loc[idx, nom])
-                cell = ws.cell(row=ligne, column=j, value=val)
-                cell.number_format = fmt
-                cell.border = BORDURE
-                if idx == "Total" or nom == "Total":
-                    cell.fill = PatternFill("solid", fgColor=GRIS_TOTAL)
-                    cell.font = Font(bold=True)
-                else:
-                    x = 0.5 if hi == lo else (val - lo) / (hi - lo)
-                    cell.fill = PatternFill("solid", fgColor=_hex(cmap, x))
-                    if x > 0.6:
-                        cell.font = Font(color="FFFFFF")
-            ligne += 1
-        ligne += 2  # respiration entre deux matrices
-
-        ws.column_dimensions["A"].width = 16
-        for j in range(2, len(cols) + 2):
-            ws.column_dimensions[get_column_letter(j)].width = 14
-
-    buf = BytesIO()
-    wb.save(buf)
-    return buf.getvalue()
-
-
-# ------------------------------------------------- construction des 4 blocs
-def construire(df: pl.DataFrame, f1="flag1", f2="flag2", montant="montant",
-               how="row", marges=True) -> list[dict]:
-    """Les 4 matrices, prêtes à afficher et à exporter."""
-    n = croise(df, f1, f2)
-    m = croise(df, f1, f2, valeur=montant)
-    n_pct, m_pct = en_pourcentage(n, f1, how), en_pourcentage(m, f1, how)
-    if marges:
-        n, m = avec_marges(n, f1), avec_marges(m, f1)
-        if how == "all":                      # les % totalisent 100, marges utiles
-            n_pct, m_pct = avec_marges(n_pct, f1), avec_marges(m_pct, f1)
-    return [
-        {"titre": "1. Effectifs (n)", "df": n, "cmap": "Blues", "fmt": "#,##0"},
-        {"titre": f"2. % des effectifs ({how})", "df": n_pct, "cmap": "Purples",
-         "fmt": '0.0"%"'},
-        {"titre": "3. Montants sommés", "df": m, "cmap": "Greens",
-         "fmt": "#,##0 €"},
-        {"titre": f"4. % des montants ({how})", "df": m_pct, "cmap": "Oranges",
-         "fmt": '0.0"%"'},
-    ]
-
-
-# ------------------------------------------------------- page Streamlit type
-def page(st, df: pl.DataFrame):
-    """À appeler depuis ta page existante : page(st, mon_df)."""
-    c1, c2 = st.columns(2)
-    how = c1.radio("Base des pourcentages", ["row", "col", "all"], horizontal=True,
-                   format_func={"row": "par ligne", "col": "par colonne",
-                                "all": "sur le total"}.get)
-    marges = c2.checkbox("Afficher les totaux", value=True)
-
-    blocs = construire(df, how=how, marges=marges)
-
-    fmt_ecran = {"#,##0": "{:,.0f}", "#,##0 €": "{:,.0f} €", '0.0"%"': "{:.1f} %"}
-    for b in blocs:
-        afficher(st, b["df"], b["titre"], fmt=fmt_ecran[b["fmt"]], cmap=b["cmap"])
-
-    st.download_button(
-        "⬇️ Exporter en Excel",
-        data=to_excel(blocs),
-        file_name="matrices_transition.xlsx",
-        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-    )
-
-
+# --------------------------------------------------------------------- exemple
 if __name__ == "__main__":
     import numpy as np
     rng = np.random.default_rng(0)
@@ -197,6 +159,18 @@ if __name__ == "__main__":
         "flag2": rng.choice(ORDRE, n, p=[.5, .3, .2]),
         "montant": rng.gamma(2, 5000, n).round(2),
     })
-    with open("matrices_transition.xlsx", "wb") as f:
-        f.write(to_excel(construire(df)))
-    print("xlsx écrit")
+
+    n_mat = avec_marges(croise(df))
+    n_pct = en_pourcentage(croise(df), how="row")
+    m_mat = avec_marges(croise(df, valeur="montant"))
+    m_pct = en_pourcentage(croise(df, valeur="montant"), how="row")
+
+    print(n_mat, n_pct, m_mat, m_pct, sep="\n\n")
+
+    exporter_html([
+        colorer(n_mat, "1. Effectifs (n)"),
+        colorer(n_pct, "2. % par ligne (transition)", fmt="{:.1f}%", cmap="Purples"),
+        colorer(m_mat, "3. Montants sommés (€)", cmap="Greens"),
+        colorer(m_pct, "4. % du montant par ligne", fmt="{:.1f}%", cmap="Oranges"),
+        colorer_feu(n_pct, "5. Lecture feu tricolore (% ligne)", fmt="{:.1f}%"),
+    ])
