@@ -1,3 +1,4 @@
-from tableau_seuils import afficher_tableau
-afficher_tableau(st, t, s)                 # table + boutons CSV et Excel
-afficher_tableau(st, t, s, autour=15)      # variante : 15 lignes de part et d'autre du seuil
+from tirage_panel import tirage_annuel, controler, repartition_mensuelle
+
+ech = tirage_annuel(df, n_par_an=30_000, seed=42)   # ou taux_individus=0.5
+print(repartition_mensuelle(ech))                   # 2500 par mois, 12 mois
